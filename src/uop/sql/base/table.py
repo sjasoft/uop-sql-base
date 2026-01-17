@@ -1,6 +1,7 @@
 from sjasoft.utils.dicts import first_kv
 from functools import reduce
 from collections import defaultdict
+import json
 
 
 python_sql = dict(
@@ -65,23 +66,39 @@ infix_operators = {
 }
 
 
-def named_parameter(name):
-    return f"%({name})s"
-
 
 class Table:
     def __init__(self, table_name, uop_types, supports_json=False):
         self.name = table_name
-        self._typed_attributes = {k: python_sql[v] for k, v in uop_types}
+        self._typed_attributes = {k: python_sql[v] for k, v in uop_types.items()}
         self._uop_types = uop_types
         self._supports_json = supports_json
         self._modify_json_support()
 
     def _modify_json_support(self):
+        json_type = "JSONB" if self._supports_json else "TEXT"
+        for attr, uop_type in self._uop_types.items():
+            if uop_type == "json":
+                self._typed_attributes[attr] = json_type
+                
+                
+    def json_serialize(self, args):
         if not self._supports_json:
-            for attr, uop_type in self._uop_types.items():
-                if uop_type == "json":
-                    self._typed_attributes[attr] = "JSONB"
+            res = {}
+            for k,v in args.items():
+                if self._uop_types.get(k) == "json":
+                    res[k] = json.dumps(v)
+                else:
+                    res[k] = v
+            return res
+        return args
+
+    def json_deserialize(self, args):
+        if not self._supports_json:
+            for k,v in args.items():
+                if self._uop_types.get(k) == "json":
+                    args[k] = json.loads(v)
+        return args
 
     def named_parameter(self, name):
         return f"%({name})s"
@@ -129,43 +146,53 @@ class Table:
                 prop, val = first_kv(criteria[key])
                 val_key = get_prop_name(prop)
                 operator = infix_operators[key]
-                return f"{prop} {operator} {named_parameter(val_key)}", {val_key: val}
+                return f"{prop} {operator} {self.named_parameter(val_key)}", {val_key: val}
             elif key == "endswith":
                 prop, val = first_kv(criteria[key])
                 val_key = get_prop_name(prop)
                 val_map = {val_key: f"%{val}"}
-                return f"{prop} LIKE {named_parameter(val_key)}", val_map
+                return f"{prop} LIKE {self.named_parameter(val_key)}", val_map
 
         return internal_modify_criteria(criteria)
+
 
     def table_creation_string(self):
         return f"CREATE TABLE {self.name} {attribute_string(self._typed_attributes)}"
 
     def select_string(self, criteria=None, only_cols=None, order_by=None, limit=None):
         cols = "*" if only_cols is None else ", ".join(only_cols)
-        return f"SELECT {cols} FROM {self.name} WHERE {self.modify_criteria(criteria)}"
+        clause, vals = self.modify_criteria(criteria)
+        res = f"SELECT {cols} FROM {self.name}"
+        if clause:
+            res = f"{res} WHERE {clause}"
+        return res, vals
 
     def count_string(self, criteria=None):
         clause, vals = self.modify_criteria(criteria)
-        return f"SELECT COUNT(*) FROM {self.name} WHERE {clause}", vals
+        res = f"SELECT COUNT(*) FROM {self.name}"
+        if clause:
+            res = f"{res} WHERE {clause}"
+        return res, vals
+    
+    def _add_where(self, base, clause):
+        return f"{base} WHERE {clause}" if clause else base
 
     def insert_string(self):
         cols = ", ".join([f"`{k}`" for k in self._typed_attributes.keys()])
-        vals = ", ".join([f"%{k}s" for k in self._typed_attributes.keys()])
+        vals = ", ".join([self.named_parameter(k) for k in self._typed_attributes.keys()])
         return f"INSERT INTO {self.name} ({cols}) VALUES ({vals})"
 
     def mod_vals(self, mods):
-        return ", ".join([f"{k} = {named_parameter(k)}" for k in mods.keys()])
+        return ", ".join([f"{k} = {self.named_parameter(k)}" for k in mods.keys()])
 
     def update_string(self, criteria, mods):
         clause, vals = self.modify_criteria(criteria)
         vals.update(mods)
-        return (
-            f"""UPDATE {self.name} 
-    SET {self.mod_vals(mods)} 
-    WHERE {clause}""",
-            vals,
-        )
+        res = f"UPDATE {self.name} SET {self.mod_vals(mods)}"
+        return self._add_where(res, clause), vals     
+
 
     def delete_string(self, criteria):
-        return f"DELETE FROM {self.name} WHERE {self.modify_criteria(criteria)}"
+        clause, vals = self.modify_criteria(criteria)
+        res = f"DELETE FROM {self.name}"
+        return self._add_where(res, clause), vals
