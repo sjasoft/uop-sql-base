@@ -10,11 +10,11 @@ python_sql = dict(
     float="Float",
     bool="Boolean",
     json="JSONB",
-    email="Varchar[255]",
-    phone="Varchar[50]",
+    email="Varchar(255)",
+    phone="Varchar(50)",
     long="Double",
-    uuid="Varchar[30]",
-    string="Varchar[255]",
+    uuid="Varchar(30)",
+    string="Varchar(255)",
     text="Text",
     epoch="Float",
     date="Float",
@@ -42,9 +42,9 @@ def attribute_string(typed_attributes):
             return f"VARCHAR(255)"
 
     for attr, type in typed_attributes.items():
-        decl = f"{attr} {type_string(type)}"
+        decl = f"{attr} {type}"
         if attr == "id":
-            decl = f"{decl}PRIMARY KEY"
+            decl = f"{decl} PRIMARY KEY"
         attr_strings.append(decl)
     attrs = ", ".join(attr_strings)
     return f"({attrs})"
@@ -66,7 +66,6 @@ infix_operators = {
 }
 
 
-
 class Table:
     def __init__(self, table_name, uop_types, supports_json=False):
         self.name = table_name
@@ -80,12 +79,11 @@ class Table:
         for attr, uop_type in self._uop_types.items():
             if uop_type == "json":
                 self._typed_attributes[attr] = json_type
-                
-                
+
     def json_serialize(self, args):
         if not self._supports_json:
             res = {}
-            for k,v in args.items():
+            for k, v in args.items():
                 if self._uop_types.get(k) == "json":
                     res[k] = json.dumps(v)
                 else:
@@ -95,7 +93,7 @@ class Table:
 
     def json_deserialize(self, args):
         if not self._supports_json:
-            for k,v in args.items():
+            for k, v in args.items():
                 if self._uop_types.get(k) == "json":
                     args[k] = json.loads(v)
         return args
@@ -114,7 +112,8 @@ class Table:
             parts = []
             vals = {}
             for clause, val_map in args:
-                parts.append(clause)
+                p_clause = f"({clause})"
+                parts.append(p_clause)
                 vals.update(val_map)
 
             clause = "(" + f" {compound_key} ".join(parts) + ")"
@@ -125,12 +124,15 @@ class Table:
 
         def or_clause(*args):
             return compound_binary("OR", *args)
+        
 
         def internal_modify_criteria(criteria):
             vals = {}
 
             if not criteria:
                 return "", vals
+            if not isinstance(criteria, dict):
+                raise ValueError("Criteria must be a dictionary")
             keys = list(criteria.keys())
             if len(keys) > 1:
                 parts = [internal_modify_criteria({k: criteria[k]}) for k in keys]
@@ -146,15 +148,21 @@ class Table:
                 prop, val = first_kv(criteria[key])
                 val_key = get_prop_name(prop)
                 operator = infix_operators[key]
-                return f"{prop} {operator} {self.named_parameter(val_key)}", {val_key: val}
+                return f"{prop} {operator} {self.named_parameter(val_key)}", {
+                    val_key: val
+                }
             elif key == "endswith":
                 prop, val = first_kv(criteria[key])
                 val_key = get_prop_name(prop)
                 val_map = {val_key: f"%{val}"}
                 return f"{prop} LIKE {self.named_parameter(val_key)}", val_map
+            else:
+                prop = key
+                val = criteria[key]
+                val_key = get_prop_name(prop)
+                return f"{prop} = {self.named_parameter(val_key)}", {val_key: val}
 
         return internal_modify_criteria(criteria)
-
 
     def table_creation_string(self):
         return f"CREATE TABLE {self.name} {attribute_string(self._typed_attributes)}"
@@ -167,19 +175,26 @@ class Table:
             res = f"{res} WHERE {clause}"
         return res, vals
 
+    def get_by_id_string(self, an_id):
+        return f"SELECT * FROM {self.name} WHERE id = {self.named_parameter('id')}", {
+            "id": an_id
+        }
+
     def count_string(self, criteria=None):
         clause, vals = self.modify_criteria(criteria)
         res = f"SELECT COUNT(*) FROM {self.name}"
         if clause:
             res = f"{res} WHERE {clause}"
         return res, vals
-    
+
     def _add_where(self, base, clause):
         return f"{base} WHERE {clause}" if clause else base
 
     def insert_string(self):
-        cols = ", ".join([f"`{k}`" for k in self._typed_attributes.keys()])
-        vals = ", ".join([self.named_parameter(k) for k in self._typed_attributes.keys()])
+        cols = ", ".join(k for k in self._typed_attributes.keys())
+        vals = ", ".join(
+            [self.named_parameter(k) for k in self._typed_attributes.keys()]
+        )
         return f"INSERT INTO {self.name} ({cols}) VALUES ({vals})"
 
     def mod_vals(self, mods):
@@ -189,8 +204,7 @@ class Table:
         clause, vals = self.modify_criteria(criteria)
         vals.update(mods)
         res = f"UPDATE {self.name} SET {self.mod_vals(mods)}"
-        return self._add_where(res, clause), vals     
-
+        return self._add_where(res, clause), vals
 
     def delete_string(self, criteria):
         clause, vals = self.modify_criteria(criteria)

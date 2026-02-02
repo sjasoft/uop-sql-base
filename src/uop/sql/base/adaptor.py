@@ -1,4 +1,3 @@
-from pytest import param
 from uop.core import db_collection, database
 from uop.sql.base.table import Table
 from uop.meta.schemas import meta
@@ -41,17 +40,24 @@ class SQLBaseCollection(db_collection.DBCollection):
             uop_types = meta.extract_uop_field_types(schema)
         return self._db.Table_Class(name, uop_types, self._supports_json)
 
-    def _fetch_one(self, clause, params):
+    def _execute(self, clause, params):
         serialized = self._table.json_serialize(params)
         curr = self._db.execute_sql(clause, serialized)
+        return curr
+
+    def _fetch_one(self, clause, params):
+        curr = self._execute(clause, params)
         res = curr.fetchone() if curr.rowcount else None
         curr.close()
         return self.process_row(res)
+    
+    def _execute_only(self, clause, params):
+        curr = self._execute(clause, params)
+        curr.close()
 
     def _fetch_all(self, clause, params):
-        serialized = self._table.json_serialize(params)
-        curr = self._db.execute_sql(clause, serialized)
-        res = curr.fetchmany() if curr.fetchone() else []
+        curr = self._execute(clause, params)
+        res = curr.fetchall() if curr.rowcount else []
         curr.close()
         return [self.process_row(row) for row in res]
 
@@ -61,15 +67,24 @@ class SQLBaseCollection(db_collection.DBCollection):
 
     def insert(self, **data):
         clause = self._table.insert_string()
-        return self._fetch_one(clause, data)
+        curr = self._execute(clause, data)
+        curr.close()
 
     def update(self, criteria, mods):
         clause, vals = self._table.update_string(criteria, mods)
-        return self._fetch_all(clause, vals)
+        return self._execute_only(clause, vals)
+    
+    def update_one(self, criteria, mods):
+        if isinstance(criteria, str):
+            criteria = {'id': criteria}
+        return self.update(criteria, mods)
+
 
     def remove(self, criteria):
+        if isinstance(criteria, str):
+            criteria = {'id': criteria}
         clause, vals = self._table.delete_string(criteria)
-        return self._fetch_all(clause, vals)
+        return self._execute_only(clause, vals)
 
     def get(self, an_id):
         clause, vals = self._table.get_by_id_string(an_id)
@@ -83,6 +98,7 @@ class SQLBaseCollection(db_collection.DBCollection):
         fetcher = self._fetch_one if only_one else self._fetch_all
         res = fetcher(clause, vals)
         if only_cols and len(only_cols) == 1:
+            res = list(res)
             return [row[only_cols[0]] for row in res]
         return res
 
@@ -136,18 +152,18 @@ class SQLBaseDatabase(database.Database):
         return self.connection.cursor()
 
     def start_long_transaction(self):
-        self.set_autocommit(self._conn, False)
+        #elf.set_autocommit(self.connection, False)
         super().start_long_transaction()
 
     def end_long_transaction(self):
-        self.set_autocommit(self._conn, True)
+        #elf.set_autocommit(self.connection, True)
         super().end_long_transaction()
 
     def db_commit(self):
-        self._curr.commit()
+        self.connection.commit()
 
     def db_abort(self):
-        self._curr.rollback()
+        self.connection.rollback()
 
     def row_as_dict(self, row):
         return row
@@ -170,8 +186,14 @@ class SQLBaseDatabase(database.Database):
 
     def execute_ddl(self, clause, params):
         # TODO research and fix for maybe special conn for DDL
-        cursor = self._autoconn.cursor()
-        cursor.execute(clause, params)
-        res = cursor.fetchall()
+        cursor = self._autoconn.execute(clause, params)
         cursor.close()
-        return res
+        
+
+    def close(self):
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+        if self._autoconn:
+            self._autoconn.close()
+            self._autoconn = None
