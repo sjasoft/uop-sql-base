@@ -101,6 +101,9 @@ class Table:
     def named_parameter(self, name):
         return f"%({name})s"
 
+    def all_tables_string(self):
+        return ""
+
     def modify_criteria(self, criteria):
         prop_count = defaultdict(int)
 
@@ -124,7 +127,6 @@ class Table:
 
         def or_clause(*args):
             return compound_binary("OR", *args)
-        
 
         def internal_modify_criteria(criteria):
             vals = {}

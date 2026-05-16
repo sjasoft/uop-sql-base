@@ -50,7 +50,7 @@ class SQLBaseCollection(db_collection.DBCollection):
         res = curr.fetchone() if curr.rowcount else None
         curr.close()
         return self.process_row(res)
-    
+
     def _execute_only(self, clause, params):
         curr = self._execute(clause, params)
         curr.close()
@@ -73,16 +73,15 @@ class SQLBaseCollection(db_collection.DBCollection):
     def update(self, criteria, mods):
         clause, vals = self._table.update_string(criteria, mods)
         return self._execute_only(clause, vals)
-    
+
     def update_one(self, criteria, mods):
         if isinstance(criteria, str):
-            criteria = {'id': criteria}
+            criteria = {"id": criteria}
         return self.update(criteria, mods)
-
 
     def remove(self, criteria):
         if isinstance(criteria, str):
-            criteria = {'id': criteria}
+            criteria = {"id": criteria}
         clause, vals = self._table.delete_string(criteria)
         return self._execute_only(clause, vals)
 
@@ -113,9 +112,7 @@ class SQLBaseDatabase(database.Database):
     JSON_SUPPORTED = False  # general case
     Table_Class = Table
 
-    def __init__(
-        self, dbname, *schemas, tenant_id=None, db_brand="sqlbase", **db_credentials
-    ):
+    def __init__(self, dbname, *schemas, tenant_id=None, **db_credentials):
         self._conn = self._autoconn = None
         super().__init__(
             dbname,
@@ -132,6 +129,17 @@ class SQLBaseDatabase(database.Database):
         if self._autoconn:
             self._autoconn.close()
             self._autoconn = None
+
+    def get_existing_tables(self):
+        cursor = self.connection.cursor()
+        cursor.execute(self.Table_Class().all_tables_string())
+        tables = {row[0] for row in cursor.fetchall()}
+        cursor.close()
+        return tables
+
+    def open_db(self):
+        super().open_db()
+        self._known_tables = self.get_existing_tables()
 
     @property
     def connection(self):
@@ -151,14 +159,6 @@ class SQLBaseDatabase(database.Database):
     def get_cursor(self):
         return self.connection.cursor()
 
-    def start_long_transaction(self):
-        #elf.set_autocommit(self.connection, False)
-        super().start_long_transaction()
-
-    def end_long_transaction(self):
-        #elf.set_autocommit(self.connection, True)
-        super().end_long_transaction()
-
     def db_commit(self):
         self.connection.commit()
 
@@ -167,9 +167,6 @@ class SQLBaseDatabase(database.Database):
 
     def row_as_dict(self, row):
         return row
-
-    def get_existing_tables(self):
-        return set()
 
     def get_managed_collection(self, name, schema):
         existing = self._collections.get(name)
@@ -188,7 +185,6 @@ class SQLBaseDatabase(database.Database):
         # TODO research and fix for maybe special conn for DDL
         cursor = self._autoconn.execute(clause, params)
         cursor.close()
-        
 
     def close(self):
         if self._conn:
