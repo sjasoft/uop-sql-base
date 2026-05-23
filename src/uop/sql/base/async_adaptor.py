@@ -144,9 +144,14 @@ class AsyncSQLBaseCollection(async_db_collection.DBCollection):
         await curr.close()
         return res
 
+    def process_row(self, row):
+        if row:
+            return self._table.json_deserialize(self._db.row_as_dict(row))
+
+
     async def _fetch_all(self, clause, params):
         curr = await self._execute(clause, params)
-        res = await curr.fetchmany() if curr.rowcount else []
+        res = await curr.fetchall() if curr.rowcount else []
         await curr.close()
         return [self.process_row(row) for row in res]
 
